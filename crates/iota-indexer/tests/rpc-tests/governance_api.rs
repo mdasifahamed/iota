@@ -486,7 +486,7 @@ fn get_latest_iota_system_state() {
 
         let system_state = client.get_latest_iota_system_state().await.unwrap();
         assert_eq!(system_state.protocol_version, ProtocolVersion::MAX.as_u64());
-        assert_eq!(system_state.system_state_version, 1);
+        assert_eq!(system_state.system_state_version, 2);
     });
 }
 
