@@ -85,7 +85,11 @@ pub struct IotaSystemStateSummaryV1 {
     /// during safe mode.
     #[schemars(with = "BigInt<u64>")]
     #[serde_as(as = "Readable<BigInt<u64>, _>")]
-    pub safe_mode_computation_rewards: u64,
+    pub safe_mode_computation_charges: u64,
+    /// Amount of burned computation rewards accumulated during safe mode.
+    #[schemars(with = "BigInt<u64>")]
+    #[serde_as(as = "Readable<BigInt<u64>, _>")]
+    pub safe_mode_computation_charges_burned: u64,
     /// Amount of storage rebates accumulated (and not yet burned) during safe
     /// mode.
     #[schemars(with = "BigInt<u64>")]
