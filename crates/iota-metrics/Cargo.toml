@@ -23,6 +23,7 @@ parking_lot.workspace = true
 prometheus.workspace = true
 scopeguard.workspace = true
 simple-server-timing-header = "0.1.1"
+sysinfo.workspace = true
 tap.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -30,3 +31,7 @@ uuid.workspace = true
 
 # internal dependencies
 prometheus-closure-metric.workspace = true
+
+[features]
+default = []
+"hardware.usage" = []
