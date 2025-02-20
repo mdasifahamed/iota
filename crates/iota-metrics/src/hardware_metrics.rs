@@ -7,7 +7,18 @@ use prometheus::{
 };
 use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 
+use crate::RegistryService;
+
 const NAMESPACE: &str = "hardware_metrics";
+
+pub fn register_hardware_metrics(
+    registry_service: &mut RegistryService,
+) -> Result<(), HardwareMetricsErr> {
+    registry_service
+        .default_registry
+        .register(Box::new(HardwareMetrics::new()?))
+        .map_err(HardwareMetricsErr::ErrRegisterHardwareMetrics)
+}
 
 pub struct HardwareMetrics {
     system: Arc<Mutex<System>>,
@@ -16,19 +27,19 @@ pub struct HardwareMetrics {
     pub disk: DiskMetrics,
 }
 impl HardwareMetrics {
-    fn new() -> Self {
+    fn new() -> Result<Self, HardwareMetricsErr> {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing()
                 .with_cpu(CpuRefreshKind::nothing())
                 .with_memory(MemoryRefreshKind::nothing().with_ram()),
         );
 
-        Self {
-            cpu: CpuMetrics::new(&mut system),
-            memory: MemoryMetrics::new(&mut system),
-            disk: DiskMetrics::new(&mut system),
+        Ok(Self {
+            cpu: CpuMetrics::new(&mut system)?,
+            memory: MemoryMetrics::new(&mut system)?,
+            disk: DiskMetrics::new()?,
             system: Arc::new(Mutex::new(system)),
-        }
+        })
     }
     fn update(&self) {
         let mut system = self.system.lock().unwrap();
@@ -60,7 +71,7 @@ pub struct CpuMetrics {
     cpu_specs: Counter,
 }
 impl CpuMetrics {
-    pub fn new(system: &System) -> Self {
+    pub fn new(system: &System) -> Result<Self, HardwareMetricsErr> {
         let cpu_vendor_id: &str = system
             .cpus()
             .first()
@@ -84,7 +95,7 @@ impl CpuMetrics {
                 )
                 .namespace(NAMESPACE),
         )
-        .unwrap();
+        .map_err(HardwareMetricsErr::ErrCreateMetric)?;
 
         // #[cfg(feature = "hardware.usage")]
         // let cpu_usage = Gauge::with_opts(
@@ -92,11 +103,11 @@ impl CpuMetrics {
         // )
         // .unwrap();
 
-        Self {
+        Ok(Self {
             // #[cfg(feature = "hardware.usage")]
             // cpu_usage,
             cpu_specs,
-        }
+        })
     }
     fn update(&self, system: &System) {
         // #[cfg(feature = "hardware.usage")]
@@ -130,24 +141,23 @@ pub struct MemoryMetrics {
     pub specs: Counter,
 }
 impl MemoryMetrics {
-    pub fn new(system: &System) -> Self {
+    pub fn new(system: &System) -> Result<Self, HardwareMetricsErr> {
         let mem_total = system.total_memory();
-        println!("mem_total: {mem_total}");
 
-        Self {
-            specs: Counter::with_opts(
-                Opts::new(
-                    "memory_specs",
-                    "Memory specs (constants: total amount, ...)",
-                )
-                .const_label("mem_total_ram_bytes", mem_total.to_string())
-                .const_label(
-                    "mem_total_ram_human",
-                    format!("{}", human_fmt_bytes(mem_total)),
-                ),
+        let mem_specs = Counter::with_opts(
+            Opts::new(
+                "memory_specs",
+                "Memory specs (constants: total amount, ...)",
             )
-            .unwrap(),
-        }
+            .const_label("mem_total_ram_bytes", mem_total.to_string())
+            .const_label(
+                "mem_total_ram_human",
+                format!("{}", human_fmt_bytes(mem_total)),
+            ),
+        )
+        .map_err(HardwareMetricsErr::ErrCreateMetric)?;
+
+        Ok(Self { specs: mem_specs })
     }
 }
 const MEMORY_METRICS_COUNT: usize = 3;
@@ -168,7 +178,7 @@ pub struct DiskMetrics {
     pub specs: Counter,
 }
 impl DiskMetrics {
-    pub fn new(system: &System) -> Self {
+    pub fn new() -> Result<Self, HardwareMetricsErr> {
         let disks = Disks::new_with_refreshed_list();
         // for disk in disks.iter() {
         //     println!("disk name: {}", disk.name().to_string_lossy());
@@ -181,17 +191,17 @@ impl DiskMetrics {
             .map(|d| d.total_space())
             .unwrap_or(0);
 
-        Self {
-            specs: Counter::with_opts(
-                Opts::new(
-                    "disk_specs",
-                    "Constant disk specifications (total disk space, ...)",
-                )
-                .const_label("disk_total_space_bytes", disk_total_space.to_string())
-                .const_label("disk_total_space_human", human_fmt_bytes(disk_total_space)),
+        let disk_specs = Counter::with_opts(
+            Opts::new(
+                "disk_specs",
+                "Constant disk specifications (total disk space, ...)",
             )
-            .unwrap(),
-        }
+            .const_label("disk_total_space_bytes", disk_total_space.to_string())
+            .const_label("disk_total_space_human", human_fmt_bytes(disk_total_space)),
+        )
+        .map_err(HardwareMetricsErr::ErrCreateMetric)?;
+
+        Ok(Self { specs: disk_specs })
     }
 }
 const DISK_METRICS_COUNT: usize = 1;
@@ -226,24 +236,33 @@ fn human_fmt_bytes(bytes: u64) -> String {
     format!("{:.2} {}", value, UNITS[unit_idx])
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum HardwareMetricsErr {
+    #[error("Failed creating metric")]
+    ErrCreateMetric(prometheus::Error),
+    #[error("Failed registering hardware metrics onto RegistryService")]
+    ErrRegisterHardwareMetrics(prometheus::Error),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use prometheus::Registry;
 
     #[test]
-    fn test_hardware_metrics() {
-        let metrics_collector = HardwareMetrics::new();
+    fn test_hardware_metrics() -> Result<(), Box<dyn std::error::Error>> {
+        let metrics_collector = HardwareMetrics::new()?;
         let metrics = metrics_collector.collect();
         dbg!(metrics);
+        Ok(())
     }
 
     #[test]
-    fn test_cpu_metrics() {
+    fn test_cpu_metrics() -> Result<(), Box<dyn std::error::Error>> {
         let mut system = System::new_with_specifics(
             RefreshKind::nothing().with_cpu(CpuRefreshKind::everything()),
         );
-        let mut cpu_metrics = CpuMetrics::new(&mut system);
+        let mut cpu_metrics = CpuMetrics::new(&mut system)?;
 
         // let r = Registry::new();
         // r.register(Box::new(cpu_metrics.clone())).unwrap();
@@ -253,5 +272,6 @@ mod tests {
         dbg!(&metrics);
 
         // assert_eq!(cpu_metrics.desc().len(), 1);
+        Ok(())
     }
 }
