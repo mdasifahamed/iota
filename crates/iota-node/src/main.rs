@@ -73,7 +73,7 @@ fn main() {
 
     let runtimes = IotaRuntimes::new(&config);
     let metrics_rt = runtimes.metrics.enter();
-    let registry_service = iota_metrics::start_prometheus_server(config.metrics_address);
+    let mut registry_service = iota_metrics::start_prometheus_server(config.metrics_address);
     let prometheus_registry = registry_service.default_registry();
     register_hardware_metrics(&mut registry_service).expect("Failed registering hardware metrics");
 
