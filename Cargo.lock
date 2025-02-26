@@ -7268,6 +7268,7 @@ dependencies = [
  "prometheus-closure-metric",
  "scopeguard",
  "simple-server-timing-header",
+ "snap",
  "sysinfo",
  "tap",
  "thiserror",
