@@ -654,7 +654,7 @@ mod tests {
         let mut dag_builder = DagBuilder::new(context.clone());
         dag_builder.layers(1..=2).build();
 
-        let mut expected_unscored_subdags = vec![];
+        let mut expected_scored_subdags = vec![];
         let mut expected_commits = vec![];
         let mut blocks_to_write = vec![];
 
