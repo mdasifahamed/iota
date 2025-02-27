@@ -46,7 +46,7 @@ use tokio::{
     runtime::Handle,
     sync::oneshot,
     task::{JoinHandle, JoinSet},
-    time::{Instant, MissedTickBehavior, sleep},
+    time::{MissedTickBehavior, sleep},
 };
 use tracing::{debug, info, warn};
 
@@ -87,8 +87,6 @@ pub(crate) struct CommitSyncer<C: NetworkClient> {
 
     // Shared components wrapper.
     inner: Arc<Inner<C>>,
-    // State of peers shared by fetch tasks, to determine the next peer to fetch against.
-    peer_state: Arc<Mutex<PeerState>>,
 
     // States only used by the scheduler.
 
@@ -119,7 +117,6 @@ impl<C: NetworkClient> CommitSyncer<C> {
         block_verifier: Arc<dyn BlockVerifier>,
         dag_state: Arc<RwLock<DagState>>,
     ) -> Self {
-        let peer_state = Arc::new(Mutex::new(PeerState::new(&context)));
         let inner = Arc::new(Inner {
             context,
             core_thread_dispatcher,
@@ -132,7 +129,6 @@ impl<C: NetworkClient> CommitSyncer<C> {
         let synced_commit_index = inner.dag_state.read().last_commit_index();
         CommitSyncer {
             inner,
-            peer_state,
             inflight_fetches: JoinSet::new(),
             pending_fetches: BTreeSet::new(),
             fetched_ranges: BTreeMap::new(),
@@ -376,11 +372,8 @@ impl<C: NetworkClient> CommitSyncer<C> {
             let Some(commit_range) = self.pending_fetches.pop_first() else {
                 break;
             };
-            self.inflight_fetches.spawn(Self::fetch_loop(
-                self.inner.clone(),
-                self.peer_state.clone(),
-                commit_range,
-            ));
+            self.inflight_fetches
+                .spawn(Self::fetch_loop(self.inner.clone(), commit_range));
         }
 
         let metrics = &self.inner.context.metrics.node_metrics;
@@ -400,7 +393,6 @@ impl<C: NetworkClient> CommitSyncer<C> {
     // Returns the fetched commits and blocks referenced by the commits.
     async fn fetch_loop(
         inner: Arc<Inner<C>>,
-        peer_state: Arc<Mutex<PeerState>>,
         commit_range: CommitRange,
     ) -> (CommitIndex, Vec<TrustedCommit>, Vec<VerifiedBlock>) {
         // Individual request base timeout.
@@ -507,7 +499,7 @@ impl<C: NetworkClient> CommitSyncer<C> {
     // the certified commits are fetched and sent to Core for processing.
     async fn fetch_once(
         inner: Arc<Inner<C>>,
-        peer_state: Arc<Mutex<PeerState>>,
+        target_authority: AuthorityIndex,
         commit_range: CommitRange,
         timeout: Duration,
     ) -> ConsensusResult<(Vec<TrustedCommit>, Vec<VerifiedBlock>)> {
@@ -522,46 +514,13 @@ impl<C: NetworkClient> CommitSyncer<C> {
             .commit_sync_fetch_once_latency
             .start_timer();
 
-        // 1. Find an available authority to fetch commits and blocks from, and wait
-        // if it is not yet ready.
-        let Some((available_time, retries, target_authority)) =
-            peer_state.lock().available_authorities.pop_first()
-        else {
-            sleep(MAX_RETRY_INTERVAL).await;
-            return Err(ConsensusError::NoAvailableAuthorityToFetchCommits);
-        };
-        let now = Instant::now();
-        if now < available_time {
-            sleep(available_time - now).await;
-        }
-
-        // 2. Fetch commits in the commit range from the selected authority.
-        let (serialized_commits, serialized_blocks) = match inner
+        // 1. Fetch commits in the commit range from the target authority.
+        let (serialized_commits, serialized_blocks) = inner
             .network_client
             .fetch_commits(target_authority, commit_range.clone(), timeout)
-            .await
-        {
-            Ok(result) => {
-                let mut peer_state = peer_state.lock();
-                let now = Instant::now();
-                peer_state
-                    .available_authorities
-                    .insert((now, 0, target_authority));
-                result
-            }
-            Err(e) => {
-                let mut peer_state = peer_state.lock();
-                let now = Instant::now();
-                peer_state.available_authorities.insert((
-                    now + FETCH_RETRY_BASE_INTERVAL * retries.min(FETCH_RETRY_INTERVAL_LIMIT),
-                    retries.saturating_add(1),
-                    target_authority,
-                ));
-                return Err(e);
-            }
-        };
+            .await?;
 
-        // 3. Verify the response contains blocks that can certify the last returned
+        // 2. Verify the response contains blocks that can certify the last returned
         //    commit,
         // and the returned commits are chained by digest, so earlier commits are
         // certified as well.
@@ -580,7 +539,7 @@ impl<C: NetworkClient> CommitSyncer<C> {
             .await
             .expect("Spawn blocking should not fail")?;
 
-        // 4. Fetch blocks referenced by the commits, from the same authority.
+        // 3. Fetch blocks referenced by the commits, from the same authority.
         let block_refs: Vec<_> = commits.iter().flat_map(|c| c.blocks()).cloned().collect();
         let num_chunks = block_refs
             .len()
@@ -801,40 +760,6 @@ impl<C: NetworkClient> Inner<C> {
             .zip(serialized_commits)
             .map(|((_d, c), s)| TrustedCommit::new_trusted(c, s))
             .collect())
-    }
-}
-
-struct PeerState {
-    // The value is a tuple of
-    // - the next available time for the authority to fetch from,
-    // - count of current consecutive failures fetching from the authority, reset on success,
-    // - authority index.
-    // TODO: move this to a separate module, add load balancing, add throttling, and consider
-    // health of peer via previous request failures and leader scores.
-    available_authorities: BTreeSet<(Instant, u32, AuthorityIndex)>,
-}
-
-impl PeerState {
-    fn new(context: &Context) -> Self {
-        // Randomize the initial order of authorities.
-        let mut shuffled_authority_indices: Vec<_> = context
-            .committee
-            .authorities()
-            .filter_map(|(index, _)| {
-                if index != context.own_index {
-                    Some(index)
-                } else {
-                    None
-                }
-            })
-            .collect();
-        shuffled_authority_indices.shuffle(&mut rand::thread_rng());
-        Self {
-            available_authorities: shuffled_authority_indices
-                .into_iter()
-                .map(|i| (Instant::now(), 0, i))
-                .collect(),
-        }
     }
 }
 
