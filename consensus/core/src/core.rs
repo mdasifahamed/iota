@@ -629,6 +629,10 @@ impl Core {
             self.dag_state
                 .write()
                 .add_unscored_committed_subdags(subdags.clone());
+
+            // Try to unsuspend blocks if gc_round has advanced.
+            self.block_manager
+                .try_unsuspend_blocks_for_latest_gc_round();
             committed_subdags.extend(subdags);
         }
 
@@ -730,10 +734,15 @@ impl Core {
     /// round.
     fn ancestors_to_propose(&mut self, clock_round: Round) -> Vec<VerifiedBlock> {
         // Now take the ancestors before the clock_round (excluded) for each authority.
-        let ancestors = self
-            .dag_state
-            .read()
-            .get_last_cached_block_per_authority(clock_round);
+        let (ancestors, gc_enabled, gc_round) = {
+            let dag_state = self.dag_state.read();
+            (
+                dag_state.get_last_cached_block_per_authority(clock_round),
+                dag_state.gc_enabled(),
+                dag_state.gc_round(),
+            )
+        };
+
         assert_eq!(
             ancestors.len(),
             self.context.committee.size(),
@@ -749,6 +758,12 @@ impl Core {
                 ancestors
                     .into_iter()
                     .filter(|block| block.author() != self.context.own_index)
+                    .filter(|block| {
+                        if gc_enabled && gc_round > GENESIS_ROUND {
+                            return block.round() > gc_round;
+                        }
+                        true
+                    })
                     .flat_map(|block| {
                         if let Some(last_block_ref) = self.last_included_ancestors[block.author()] {
                             return (last_block_ref.round < block.round()).then_some(block);
