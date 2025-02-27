@@ -311,7 +311,6 @@ impl UnscoredSubdag {
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::max;
 
     use super::*;
     use crate::{
@@ -391,26 +390,9 @@ mod tests {
             .skip_block()
             .build();
 
-        let leaders = dag_builder
-            .leader_blocks(1..=4)
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
         let mut unscored_subdags = vec![];
-        let mut last_committed_rounds = vec![0; 4];
-        for (idx, leader) in leaders.into_iter().enumerate() {
-            let commit_index = idx as u32 + 1;
-            let (subdag, _commit) = dag_builder.get_sub_dag_and_commit(
-                leader,
-                last_committed_rounds.clone(),
-                commit_index,
-            );
-            for block in subdag.blocks.iter() {
-                last_committed_rounds[block.author().value()] =
-                    max(block.round(), last_committed_rounds[block.author().value()]);
-            }
-            unscored_subdags.push(subdag);
+        for (sub_dag, _commit) in dag_builder.get_sub_dag_and_commits(1..=4) {
+            unscored_subdags.push(sub_dag);
         }
         let scoring_strategy = VoteScoringStrategy {};
         let mut calculator =
@@ -479,27 +461,9 @@ mod tests {
             .skip_block()
             .build();
 
-        let leaders = dag_builder
-            .leader_blocks(1..=4)
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
-
         let mut unscored_subdags = vec![];
-        let mut last_committed_rounds = vec![0; 4];
-        for (idx, leader) in leaders.into_iter().enumerate() {
-            let commit_index = idx as u32 + 1;
-            let (subdag, _commit) = dag_builder.get_sub_dag_and_commit(
-                leader,
-                last_committed_rounds.clone(),
-                commit_index,
-            );
-            tracing::info!("{subdag:?}");
-            for block in subdag.blocks.iter() {
-                last_committed_rounds[block.author().value()] =
-                    max(block.round(), last_committed_rounds[block.author().value()]);
-            }
-            unscored_subdags.push(subdag);
+        for (sub_dag, _commit) in dag_builder.get_sub_dag_and_commits(1..=4) {
+            unscored_subdags.push(sub_dag);
         }
 
         let scoring_strategy = VoteScoringStrategy {};
