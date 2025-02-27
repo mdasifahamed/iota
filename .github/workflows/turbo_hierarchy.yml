@@ -87,10 +87,10 @@ jobs:
         with:
           version: "latest"
       - name: Build
-        run: pnpm turbo build
+        run: pnpm turbo build --filter '!iota-docs'
       - name: Test
         # @iota/ledgerjs-hw-app-iota is tested separately
-        run: pnpm turbo test --filter '!@iota/ledgerjs-hw-app-iota'
+        run: pnpm turbo test --filter '!@iota/ledgerjs-hw-app-iota' --filter '!iota-docs'
       # Pack wallet extension and upload it as an artifact for easy developer use:
       - name: Wallet Extension Has Changes?
         id: wallet-diff
