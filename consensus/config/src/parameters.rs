@@ -92,6 +92,9 @@ impl Parameters {
             // simtest is single threaded, and spending too much time in
             // consensus can lead to starvation elsewhere.
             Duration::from_millis(400)
+        } else if cfg!(test) {
+            // Avoid excessive CPU, data and logs in tests.
+            Duration::from_millis(250)
         } else {
             Duration::from_millis(50)
         }
